@@ -43,6 +43,7 @@ public class Generator {
         long t0 = System.nanoTime();
         Map<String, Set<Integer>> presencePlan = buildPresencePlan(numSubscriptions, seed);
         Map<String, Set<Integer>> equalityPlan = buildEqualityPlan(numSubscriptions, presencePlan, seed);
+        validateEqualityPlan(equalityPlan, presencePlan, numSubscriptions);
         double planningTime = secondsSince(t0);
 
         long t1 = System.nanoTime();
@@ -177,14 +178,46 @@ public class Generator {
 
     private Map<String, Set<Integer>> buildPresencePlan(int totalSubscriptions, long seed) {
         Random rng = new Random(seed);
+
         Map<String, Set<Integer>> plan = new HashMap<>();
+        Map<String, Integer> remaining = new HashMap<>();
 
         for (String fieldName : Config.FIELD_ORDER) {
-            double percent = Config.FIELD_PRESENCE.get(fieldName);
-            int count = exactCount(totalSubscriptions, percent);
-            plan.put(fieldName, pickExactIndices(totalSubscriptions, count, rng));
+            plan.put(fieldName, new HashSet<>());
+            int target = exactCount(totalSubscriptions, Config.FIELD_PRESENCE.get(fieldName));
+            remaining.put(fieldName, target);
         }
 
+        for (int i = 0; i < totalSubscriptions; i++) {
+            String chosenField = pickFieldForMandatoryAssignment(remaining, rng);
+            plan.get(chosenField).add(i);
+            remaining.put(chosenField, remaining.get(chosenField) - 1);
+        }
+
+        for (String fieldName : Config.FIELD_ORDER) {
+            int need = remaining.get(fieldName);
+            if (need <= 0) {
+                continue;
+            }
+
+            List<Integer> candidates = new ArrayList<>();
+            for (int i = 0; i < totalSubscriptions; i++) {
+                if (!plan.get(fieldName).contains(i)) {
+                    candidates.add(i);
+                }
+            }
+
+            Collections.shuffle(candidates, rng);
+
+            for (int k = 0; k < need; k++) {
+                int subIndex = candidates.get(k);
+                plan.get(fieldName).add(subIndex);
+            }
+
+            remaining.put(fieldName, 0);
+        }
+
+        validatePresencePlan(plan, totalSubscriptions);
         return plan;
     }
 
@@ -350,6 +383,84 @@ public class Generator {
         }
 
         return counts;
+    }
+
+    private String pickFieldForMandatoryAssignment(Map<String, Integer> remaining, Random rng) {
+        List<String> available = new ArrayList<>();
+        int totalWeight = 0;
+
+        for (String fieldName : Config.FIELD_ORDER) {
+            int rem = remaining.get(fieldName);
+            if (rem > 0) {
+                available.add(fieldName);
+                totalWeight += rem;
+            }
+        }
+
+        if (available.isEmpty()) {
+            throw new IllegalStateException("No field has remaining quota for mandatory assignment.");
+        }
+
+        int pick = rng.nextInt(totalWeight);
+        int cumulative = 0;
+
+        for (String fieldName : available) {
+            cumulative += remaining.get(fieldName);
+            if (pick < cumulative) {
+                return fieldName;
+            }
+        }
+
+        return available.get(available.size() - 1);
+    }
+
+    private void validatePresencePlan(Map<String, Set<Integer>> plan, int totalSubscriptions) {
+        for (int i = 0; i < totalSubscriptions; i++) {
+            boolean covered = false;
+            for (String fieldName : Config.FIELD_ORDER) {
+                if (plan.get(fieldName).contains(i)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) {
+                throw new IllegalStateException("Empty subscription found at index " + i);
+            }
+        }
+
+        for (String fieldName : Config.FIELD_ORDER) {
+            int expected = exactCount(totalSubscriptions, Config.FIELD_PRESENCE.get(fieldName));
+            int actual = plan.get(fieldName).size();
+            if (expected != actual) {
+                throw new IllegalStateException(
+                        "Field " + fieldName + " has count " + actual + ", expected " + expected
+                );
+            }
+        }
+    }
+
+    private void validateEqualityPlan(Map<String, Set<Integer>> equalityPlan,
+                                      Map<String, Set<Integer>> presencePlan,
+                                      int totalSubscriptions) {
+        for (String fieldName : Config.EQUALITY_MIN_PERCENT.keySet()) {
+            int expected = exactCount(totalSubscriptions, Config.EQUALITY_MIN_PERCENT.get(fieldName));
+            int actual = equalityPlan.get(fieldName).size();
+
+            if (actual != expected) {
+                throw new IllegalStateException(
+                        "Equality count for " + fieldName + " is " + actual + ", expected " + expected
+                );
+            }
+
+            for (int index : equalityPlan.get(fieldName)) {
+                if (!presencePlan.get(fieldName).contains(index)) {
+                    throw new IllegalStateException(
+                            "Equality assigned to subscription " + index + " for field " + fieldName +
+                                    " but the field is not present there."
+                    );
+                }
+            }
+        }
     }
 
     private void writeReport(Path reportPath,

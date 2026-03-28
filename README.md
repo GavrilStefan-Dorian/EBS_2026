@@ -14,16 +14,16 @@ Two tests ran:
 
 ## Execution times 
 
-| Publications | Subscriptions | Threads | Planning Time | Publication Generation Time | Subscription Generation Time | Results File Gen Time | Total Time |
-|-------------:|--------------:|--------:|--------------:|----------------------------:|-----------------------------:|----------------------:|-----------:|
-| 10000 | 10000 | 1 |    0.016911 s | 0.074665 s | 0.069910 s |            0.026449 s | 0.187934 s |
-| 10000 | 10000 | 4 |    0.009115 s | 0.020321 s | 0.009603 s |            0.017302 s | 0.056342 s |
-| 200000 | 200000 | 1 |    0.146416 s | 0.280663 s | 0.253601 s |            0.098633 s | 0.779313 s |
-| 200000 | 200000 | 4 |    0.066878 s | 0.072866 s | 0.072689 s |            0.051748 s | 0.264180 s |
+| Publications | Subscriptions | Threads | Planning Time | Publication Generation Time | Subscription Generation Time | File Write Time | Total Time |
+|-------------:|--------------:|--------:|--------------:|----------------------------:|-----------------------------:|----------------:|-----------:|
+| 10000 | 10000 | 1 | 0.030514 s | 0.064062 s | 0.037328 s | 0.023053 s | 0.154958 s |
+| 10000 | 10000 | 4 | 0.022684 s | 0.017471 s | 0.011464 s | 0.019037 s | 0.070656 s |
+| 200000 | 200000 | 1 | 0.406678 s | 0.134954 s | 0.140904 s | 0.086859 s | 0.769394 s |
+| 200000 | 200000 | 4 | 0.119982 s | 0.052584 s | 0.027126 s | 0.095179 s | 0.294870 s |
 
 
 ## Processor specifications
-Processor: **[AMD Ryzen 7](https://www.cpubenchmark.net/cpu.php?cpu=AMD+Ryzen+7+260&id=6658)**
+Processor: **[AMD Ryzen 7 260](https://www.cpubenchmark.net/cpu.php?cpu=AMD+Ryzen+7+260&id=6658)**
 
 **NOTE**: here you can also add your own cpu and specs after testing, same for the exec runtimes
 

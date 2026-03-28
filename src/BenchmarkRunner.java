@@ -46,9 +46,13 @@ public class BenchmarkRunner {
             Map<String, Double> timings = generator.generateAll();
 
             System.out.println("Done.");
-            for (Map.Entry<String, Double> entry : timings.entrySet()) {
-                System.out.printf("%s: %.6fs%n", entry.getKey(), entry.getValue());
-            }
+
+            System.out.printf("planning_time: %.6fs%n", timings.get("planning_time"));
+            System.out.printf("publication_generation_time: %.6fs%n", timings.get("publication_generation_time"));
+            System.out.printf("subscription_generation_time: %.6fs%n", timings.get("subscription_generation_time"));
+            System.out.printf("io_time: %.6fs%n", timings.get("io_time"));
+            System.out.printf("total_time: %.6fs%n", timings.get("total_time"));
+
             System.out.println("Files written to: " + outputDir);
             System.out.println();
 
