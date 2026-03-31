@@ -32,6 +32,16 @@ Two tests ran:
 | 200000 | 200000 | 4 | 0.437459 s | 0.366560 s | 0.130583 s | 0.125246 s | 1.059848 s |
 
 
+### AMD Ryzen AI 9 HX 370
+
+| Publications | Subscriptions | Threads | Planning Time | Publication Generation Time | Subscription Generation Time | File Write Time | Total Time |
+| -----------: | ------------: | ------: | ------------: | --------------------------: | ---------------------------: | --------------: | ---------: |
+|        10000 |         10000 |       1 |    0.028370 s |                  0.087985 s |                   0.038368 s |      0.036875 s | 0.191598 s |
+|        10000 |         10000 |       4 |    0.010246 s |                  0.053746 s |                   0.020002 s |      0.036829 s | 0.120822 s |
+|       200000 |        200000 |       1 |    0.343109 s |                  0.123385 s |                   0.102323 s |      0.067552 s | 0.636369 s |
+|       200000 |        200000 |       4 |    0.151507 s |                  0.058534 s |                   0.049319 s |      0.055266 s | 0.314625 s |
+
+
 ## Processor specifications
 Processor: **[AMD Ryzen 7 260](https://www.cpubenchmark.net/cpu.php?cpu=AMD+Ryzen+7+260&id=6658)**
 
@@ -40,3 +50,7 @@ Processor: **[AMD Ryzen 7 260](https://www.cpubenchmark.net/cpu.php?cpu=AMD+Ryze
 Processor: **[Intel Core i5-7200U](https://browser.geekbench.com/v6/cpu/703653)**
 
 ![i5-7200u.PNG](i5-7200u.PNG)
+
+Processor: **[AMD Ryzen AI 9 HX 370](https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series/amd-ryzen-ai-9-hx-370.html)**
+
+![ai-9-hx-370.png](ai-9-hx-370.png)
