@@ -1,0 +1,129 @@
+import sys
+import os
+import argparse
+import pika
+import time
+import uuid
+import json
+import random
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from common.coordinator_client import CoordinatorClient
+from common.parser import parse_subscription_line
+from proto import messages_pb2
+
+class Subscriber:
+    def __init__(self, subscriber_id, file_path):
+        self.subscriber_id = subscriber_id
+        self.file_path = file_path
+        self.coord_client = CoordinatorClient()
+        retries = 15
+        while retries > 0:
+            try:
+                self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+                break
+            except pika.exceptions.AMQPConnectionError:
+                print(f"[{self.subscriber_id}] Waiting for RabbitMQ... ({retries} retries left)")
+                retries -= 1
+                time.sleep(2)
+        else:
+            raise Exception("Could not connect to RabbitMQ")
+                
+        self.channel = self.connection.channel()
+        
+        self.channel.exchange_declare(exchange='notifications_exchange', exchange_type='direct')
+        result = self.channel.queue_declare(queue=f'subscriber.{self.subscriber_id}.notifications', exclusive=False)
+        self.queue_name = result.method.queue
+        
+        self.channel.queue_bind(
+            exchange='notifications_exchange',
+            queue=self.queue_name,
+            routing_key=self.subscriber_id
+        )
+        
+        self.metrics = {
+            'received': 0,
+            'total_latency_ms': 0
+        }
+
+    def register_subscriptions(self, target_count=None):
+        with open(self.file_path, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+            
+        if not lines:
+            print("No subscriptions to register.")
+            return
+
+        brokers = self.coord_client.get_brokers()
+        while not brokers:
+            print("Waiting for active brokers...")
+            import time
+            time.sleep(1)
+            brokers = self.coord_client.get_brokers()
+            
+        # connect randomly to a broker
+        access_broker = random.choice(brokers)
+        print(f"[{self.subscriber_id}] Connecting to random access broker: {access_broker}")
+        
+        count = target_count or len(lines)
+        for i in range(count):
+            line = lines[i % len(lines)]
+            sub = parse_subscription_line(line, subscriber_id=self.subscriber_id)
+            if not sub:
+                continue
+                
+            # We send all subscriptions to the access broker.
+            # The access broker will apply the advanced routing mechanism to distribute them.
+            self.channel.basic_publish(
+                exchange='',
+                routing_key=f'broker.{access_broker}.subs',
+                body=sub.SerializeToString()
+            )
+            
+        print(f"[{self.subscriber_id}] Sent {count} subscriptions to access broker {access_broker}.")
+
+    def on_notification(self, ch, method, properties, body):
+        notif = messages_pb2.Notification()
+        notif.ParseFromString(body)
+        
+        latency = int(time.time() * 1000) - notif.publication.timestamp
+        self.metrics['received'] += 1
+        self.metrics['total_latency_ms'] += latency
+        
+        # print(f"[{self.subscriber_id}] Notification matched Sub={notif.subscription_id}, Pub={notif.publication.id}, Latency={latency}ms")
+        
+        # Periodically log metrics to file for evaluation
+        if self.metrics['received'] % 100 == 0:
+            avg_latency = self.metrics['total_latency_ms'] / self.metrics['received']
+            with open(f"{self.subscriber_id}_metrics.json", "w") as f:
+                json.dump(self.metrics, f)
+                
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def start(self, sub_count=None):
+        self.register_subscriptions(target_count=sub_count)
+        print(f"[{self.subscriber_id}] Waiting for notifications...")
+        self.channel.basic_consume(
+            queue=self.queue_name,
+            on_message_callback=self.on_notification
+        )
+        try:
+            self.channel.start_consuming()
+        except KeyboardInterrupt:
+            # Final dump
+            with open(f"{self.subscriber_id}_metrics.json", "w") as f:
+                json.dump(self.metrics, f)
+            print(f"[{self.subscriber_id}] Stopped. Total received: {self.metrics['received']}")
+            self.connection.close()
+            self.coord_client.close()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--id', required=True)
+    parser.add_argument('--file', required=True)
+    parser.add_argument('--count', type=int, help='Number of subscriptions to register')
+    args = parser.parse_args()
+    
+    sub = Subscriber(args.id, args.file)
+    sub.start(sub_count=args.count)

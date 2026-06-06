@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package pubsub;
+
+message Publication {
+    string id = 1;
+    string publisher_id = 2;
+    int64 timestamp = 3;
+    map<string, string> string_fields = 4;
+    map<string, double> double_fields = 5;
+}
+
+message SubscriptionCondition {
+    string field = 1;
+    string operator = 2;
+    string string_value = 3;
+    double double_value = 4;
+    bool is_string = 5;
+}
+
+message Subscription {
+    string id = 1;
+    string subscriber_id = 2;
+    repeated SubscriptionCondition conditions = 3;
+}
+
+message Notification {
+    string subscription_id = 1;
+    Publication publication = 2;
+}
