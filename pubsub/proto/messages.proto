@@ -28,3 +28,8 @@ message Notification {
     string subscription_id = 1;
     Publication publication = 2;
 }
+
+message RoutingEntry {
+    string source_broker = 1;
+    Subscription subscription = 2;
+}

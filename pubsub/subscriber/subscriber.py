@@ -62,9 +62,7 @@ class Subscriber:
             time.sleep(1)
             brokers = self.coord_client.get_brokers()
             
-        # connect randomly to a broker
-        access_broker = random.choice(brokers)
-        print(f"[{self.subscriber_id}] Connecting to random access broker: {access_broker}")
+        print(f"[{self.subscriber_id}] Distributing subscriptions evenly among brokers: {brokers}")
         
         count = target_count or len(lines)
         for i in range(count):
@@ -73,15 +71,15 @@ class Subscriber:
             if not sub:
                 continue
                 
-            # We send all subscriptions to the access broker.
-            # The access broker will apply the advanced routing mechanism to distribute them.
+            # Distribute balanced across brokers to satisfy the assignment requirement
+            target_broker = brokers[i % len(brokers)]
             self.channel.basic_publish(
                 exchange='',
-                routing_key=f'broker.{access_broker}.subs',
+                routing_key=f'broker.{target_broker}.subs',
                 body=sub.SerializeToString()
             )
             
-        print(f"[{self.subscriber_id}] Sent {count} subscriptions to access broker {access_broker}.")
+        print(f"[{self.subscriber_id}] Sent {count} subscriptions, distributed across all brokers.")
 
     def on_notification(self, ch, method, properties, body):
         notif = messages_pb2.Notification()
