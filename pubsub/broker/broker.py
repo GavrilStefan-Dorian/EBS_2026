@@ -3,8 +3,6 @@ import threading
 import argparse
 import pika
 import time
-import json
-import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,8 +14,9 @@ from proto import messages_pb2
 class Broker:
     def __init__(self, broker_id):
         self.broker_id = broker_id
-        self.subscriptions = [] # list of messages_pb2.Subscription
-        self.seen_publications = set()
+        
+        self.local_subscriptions = [] # Subscriptions stored on this broker
+        self.routing_table = [] # Tuples of (messages_pb2.Subscription, target_broker_id)
         
         self.coord_client = CoordinatorClient()
         
@@ -35,14 +34,17 @@ class Broker:
                 
         self.channel = self.connection.channel()
         
-        # Subscriptions input queue (from subscribers or other brokers)
+        # 1. Subscriptions from subscribers
         self.channel.queue_declare(queue=f'broker.{self.broker_id}.subs')
         
-        # Routed subscriptions (already assigned to this broker)
-        self.channel.queue_declare(queue=f'broker.{self.broker_id}.routed_subs')
+        # 2. Routing entries from other brokers (flooded subscriptions)
+        self.channel.queue_declare(queue=f'broker.{self.broker_id}.routing')
         
-        # Publications input queue (from publishers or other brokers)
+        # 3. Publications from publishers (entry point)
         self.channel.queue_declare(queue=f'broker.{self.broker_id}.pubs')
+        
+        # 4. Publications forwarded from other brokers
+        self.channel.queue_declare(queue=f'broker.{self.broker_id}.forwarded_pubs')
         
         # Notifications exchange
         self.channel.exchange_declare(exchange='notifications_exchange', exchange_type='direct')
@@ -54,73 +56,37 @@ class Broker:
         sub = messages_pb2.Subscription()
         sub.ParseFromString(body)
         
-        # hash-based distribution
-        brokers = self.coord_client.get_brokers()
-        if not brokers:
-            # If we don't know the network, keep it locally to be safe
-            self.subscriptions.append(sub)
-            print(f"[{self.broker_id}] Kept subscription {sub.id} (no other brokers known). Is the coordinator malfunctioning?")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
-            
-        brokers.sort()
-        # hash sub ID to determine target broker
-        target_idx = hash(sub.id) % len(brokers)
-        target_broker = brokers[target_idx]
+        # Store it locally
+        self.local_subscriptions.append(sub)
+        print(f"[{self.broker_id}] Stored local subscription {sub.id}")
         
-        if target_broker == self.broker_id:
-            # It belongs to us
-            self.subscriptions.append(sub)
-            # print(f"[{self.broker_id}] Storing routed subscription {sub.id}")
-        else:
-            # Route it to the responsible broker
-            # print(f"[{self.broker_id}] Routing subscription {sub.id} to {target_broker}")
-            self.channel.basic_publish(
-                exchange='',
-                routing_key=f'broker.{target_broker}.routed_subs',
-                body=sub.SerializeToString()
-            )
-            
+        # Flood it to all other brokers as a Routing Entry
+        brokers = self.coord_client.get_brokers()
+        
+        routing_entry = messages_pb2.RoutingEntry()
+        routing_entry.source_broker = self.broker_id
+        routing_entry.subscription.CopyFrom(sub)
+        
+        for other_broker in brokers:
+            if other_broker != self.broker_id:
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=f'broker.{other_broker}.routing',
+                    body=routing_entry.SerializeToString()
+                )
+                
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def handle_routed_subscription(self, ch, method, properties, body):
-        sub = messages_pb2.Subscription()
-        sub.ParseFromString(body)
-        self.subscriptions.append(sub)
-        # print(f"[{self.broker_id}] Received routed subscription {sub.id} from network")
+    def handle_routing_entry(self, ch, method, properties, body):
+        entry = messages_pb2.RoutingEntry()
+        entry.ParseFromString(body)
+        
+        self.routing_table.append((entry.subscription, entry.source_broker))
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def get_neighbor(self):
-        brokers = self.coord_client.get_brokers()
-        if not brokers:
-            return None
-        brokers.sort()
-        try:
-            idx = brokers.index(self.broker_id)
-            neighbor_idx = (idx + 1) % len(brokers)
-            neighbor_id = brokers[neighbor_idx]
-            if neighbor_id != self.broker_id:
-                return neighbor_id
-        except ValueError:
-            pass
-        return None
-
-    def handle_publication(self, ch, method, properties, body):
-        pub = messages_pb2.Publication()
-        pub.ParseFromString(body)
-        
-        if pub.id in self.seen_publications:
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
-            
-        self.seen_publications.add(pub.id)
-        # print(f"[{self.broker_id}] Processing publication {pub.id}")
-        
-        # match locally
-        match_count = 0
-        for sub in self.subscriptions:
+    def _match_local_and_notify(self, pub):
+        for sub in self.local_subscriptions:
             if matches(pub, sub):
-                # send notification
                 notif = messages_pb2.Notification()
                 notif.subscription_id = sub.id
                 notif.publication.CopyFrom(pub)
@@ -130,27 +96,49 @@ class Broker:
                     routing_key=sub.subscriber_id,
                     body=notif.SerializeToString()
                 )
-                match_count += 1
+
+    def handle_publication(self, ch, method, properties, body):
+        pub = messages_pb2.Publication()
+        pub.ParseFromString(body)
+        
+        # 1. Match against local subscriptions
+        self._match_local_and_notify(pub)
                 
-        # forward to neighbor broker
-        neighbor = self.get_neighbor()
-        if neighbor:
-            # print(f"[{self.broker_id}] Forwarding to {neighbor}")
+        # 2. Match against routing table to find which brokers need this publication
+        target_brokers = set()
+        for routing_sub, target_broker in self.routing_table:
+            if matches(pub, routing_sub):
+                target_brokers.add(target_broker)
+                
+        # 3. Forward to the responsible brokers
+        for target_broker in target_brokers:
             self.channel.basic_publish(
                 exchange='',
-                routing_key=f'broker.{neighbor}.pubs',
+                routing_key=f'broker.{target_broker}.forwarded_pubs',
                 body=pub.SerializeToString()
             )
             
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
+    def handle_forwarded_publication(self, ch, method, properties, body):
+        pub = messages_pb2.Publication()
+        pub.ParseFromString(body)
+        
+        # This publication was already routed to us by another broker.
+        # We only need to match it locally and deliver it.
+        # We do NOT forward it again to avoid loops and redundant network traffic.
+        self._match_local_and_notify(pub)
+        
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
     def start(self):
-        print(f"[{self.broker_id}] Starting...")
+        print(f"[{self.broker_id}] Starting Simple Routing Broker...")
         self.start_heartbeat()
         
         self.channel.basic_consume(queue=f'broker.{self.broker_id}.subs', on_message_callback=self.handle_subscription)
-        self.channel.basic_consume(queue=f'broker.{self.broker_id}.routed_subs', on_message_callback=self.handle_routed_subscription)
+        self.channel.basic_consume(queue=f'broker.{self.broker_id}.routing', on_message_callback=self.handle_routing_entry)
         self.channel.basic_consume(queue=f'broker.{self.broker_id}.pubs', on_message_callback=self.handle_publication)
+        self.channel.basic_consume(queue=f'broker.{self.broker_id}.forwarded_pubs', on_message_callback=self.handle_forwarded_publication)
         
         print(f"[{self.broker_id}] Waiting for messages.")
         self.channel.start_consuming()

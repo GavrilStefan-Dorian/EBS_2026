@@ -143,7 +143,7 @@ if __name__ == "__main__":
     report = f"""# Evaluation Report
 
 ## Setup
-- 3 Brokers forming a ring
+- 3 Brokers forming a fully connected Simple Routing overlay
 - 3 Subscribers registering a total of 10000 subscriptions
 - {num_pubs} Publishers sending messages for {duration} seconds
 
