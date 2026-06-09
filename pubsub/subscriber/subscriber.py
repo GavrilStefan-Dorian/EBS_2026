@@ -47,7 +47,7 @@ class Subscriber:
             'total_latency_ms': 0
         }
 
-    def register_subscriptions(self, target_count=None):
+    def register_subscriptions(self, target_count=None, offset=0):
         with open(self.file_path, 'r') as f:
             lines = [line.strip() for line in f if line.strip()]
             
@@ -66,7 +66,7 @@ class Subscriber:
         
         count = target_count or len(lines)
         for i in range(count):
-            line = lines[i % len(lines)]
+            line = lines[(offset + i) % len(lines)]
             sub = parse_subscription_line(line, subscriber_id=self.subscriber_id)
             if not sub:
                 continue
@@ -99,8 +99,8 @@ class Subscriber:
                 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def start(self, sub_count=None):
-        self.register_subscriptions(target_count=sub_count)
+    def start(self, sub_count=None, offset=0):
+        self.register_subscriptions(target_count=sub_count, offset=offset)
         print(f"[{self.subscriber_id}] Waiting for notifications...")
         self.channel.basic_consume(
             queue=self.queue_name,
@@ -121,7 +121,8 @@ if __name__ == '__main__':
     parser.add_argument('--id', required=True)
     parser.add_argument('--file', required=True)
     parser.add_argument('--count', type=int, help='Number of subscriptions to register')
+    parser.add_argument('--offset', type=int, default=0, help='Start offset in subscription file')
     args = parser.parse_args()
     
     sub = Subscriber(args.id, args.file)
-    sub.start(sub_count=args.count)
+    sub.start(sub_count=args.count, offset=args.offset)
