@@ -51,6 +51,7 @@ def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
                 total_messages += res.method.message_count
             except pika.exceptions.ChannelClosedByBroker:
                 channel = connection.channel()
+                total_messages += 1
             except Exception:
                 pass
                 
@@ -61,11 +62,19 @@ def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
         time.sleep(1)
         
     connection.close()
-    print("All queues empty, proceeding to shutdown.")
+    print("All queues empty, proceeding.")
 
+def check_processes_alive(processes, name):
+    for i, p in enumerate(processes, start=1):
+        if p.poll() is not None:
+            raise RuntimeError(f"{name}{i} died during evaluation")
+        
 def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num_pubs=2):
     print(f"\n--- Running Scenario: {scenario_name} ---")
-    
+    for fname in [f"pub{i}_metrics.json" for i in range(1, num_pubs + 1)] + [f"sub{i}_metrics.json" for i in range(1, 4)]:
+        if os.path.exists(fname):
+            os.remove(fname)
+            
     subs_file = os.path.join(generated_dir, "subscriptions.txt")
     pubs_file = os.path.join(generated_dir, "publications.txt")
     
@@ -85,20 +94,29 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     
     # 3. Start 3 Subscribers (approx 3333 each)
     subs = []
+    offsets = [0, 3333, 6666]
+    counts = [3333, 3333, 3334]
+
     for i in range(1, 4):
-        count = 3334 if i == 3 else 3333
+        count = counts[i - 1]
+        offset = offsets[i - 1]
         s = start_python(
             "pubsub/subscriber/subscriber.py",
             "--id", f"sub{i}",
             "--file", subs_file,
-            "--count", str(count)
+            "--count", str(count),
+            "--offset", str(offset)
         )
         subs.append(s)
     
     print(f"Waiting for subscriptions to register...")
     time.sleep(2)
     wait_for_queues_to_drain()
+    check_processes_alive(brokers, "broker b")
+    check_processes_alive(subs, "subscriber sub")
     time.sleep(5)
+    check_processes_alive(brokers, "broker b")
+    check_processes_alive(subs, "subscriber sub")
     
     # 4. Start 2 Publishers
     pubs = []
@@ -119,7 +137,8 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     print("Publishing finished.")
 
     wait_for_queues_to_drain()
-
+    check_processes_alive(brokers, "broker b")
+    check_processes_alive(subs, "subscriber sub")
     for s in subs:
         stop_subscriber(s)
 
@@ -154,12 +173,16 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     total_latency = 0    
     for i in range(1, 4):
         metric_file = f"sub{i}_metrics.json"
+        print(f"Checking {metric_file}...")
         if os.path.exists(metric_file):
             with open(metric_file, "r") as f:
                 data = json.load(f)
                 total_received += data['received']
                 total_latency += data['total_latency_ms']
+                print(f"Loaded {metric_file}: {data}")
             os.remove(metric_file)
+        else:
+            print(f"Metric file {metric_file} NOT FOUND!")
             
     avg_latency = total_latency / total_received if total_received > 0 else 0
     
@@ -192,7 +215,7 @@ if __name__ == "__main__":
     report = f"""# Evaluation Report
 
 ## Setup
-- 3 Brokers forming a fully connected Simple Routing overlay
+- 3 Brokers forming a line/tree Simple Routing overlay: b1 -- b2 -- b3
 - 3 Subscribers registering a total of 10000 subscriptions
 - {num_pubs} Publishers sending messages for {duration} seconds
 
