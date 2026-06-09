@@ -1,13 +1,19 @@
 import re
 import uuid
 import time
+from datetime import datetime
 from proto import messages_pb2
 
-def parse_value(val_str):
-    """Parses a string into float or string, handling quotes."""
+def parse_value(field, val_str):
     val_str = val_str.strip()
+
+    if field == "date":
+        val = val_str.strip('"')
+        return float(datetime.strptime(val, "%d.%m.%Y").toordinal()), False
+
     if val_str.startswith('"') and val_str.endswith('"'):
         return val_str.strip('"'), True
+
     try:
         return float(val_str), False
     except ValueError:
@@ -36,7 +42,7 @@ def parse_publication_line(line, pub_id=None, publisher_id=""):
         if len(parts) == 2:
             key = parts[0].strip()
             val_str = parts[1].strip()
-            val, is_str = parse_value(val_str)
+            val, is_str = parse_value(key, val_str)
             if is_str:
                 pub.string_fields[key] = val
             else:
@@ -68,7 +74,7 @@ def parse_subscription_line(line, sub_id=None, subscriber_id=""):
             op = parts[1].strip()
             val_str = parts[2].strip()
             
-            val, is_str = parse_value(val_str)
+            val, is_str = parse_value(key, val_str)
             
             cond = sub.conditions.add()
             cond.field = key
