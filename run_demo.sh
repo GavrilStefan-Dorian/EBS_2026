@@ -10,10 +10,23 @@ echo "Duration: $DURATION seconds"
 
 echo -e "\n[1/5] Setting up Python virtual environment..."
 cd pubsub
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install pika protobuf grpcio-tools
+
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_CMD=python3
+else
+    PYTHON_CMD=python
+fi
+
+$PYTHON_CMD -m venv venv
+
+if [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate
+else
+    source venv/bin/activate
+fi
+
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install pika protobuf grpcio-tools
 
 echo -e "\n[2/5] Compiling Protobuf schemas..."
 python -m grpc_tools.protoc -I. --python_out=. proto/messages.proto
@@ -30,7 +43,13 @@ echo -e "\n[4/5] Running Evaluation..."
 # - Run a feed for each scenario (3 minutes by default).
 # - Generate Evaluation_Report.md.
 cd ..
-source pubsub/venv/bin/activate
+
+if [ -f "pubsub/venv/Scripts/activate" ]; then
+    source pubsub/venv/Scripts/activate
+else
+    source pubsub/venv/bin/activate
+fi
+
 python pubsub/evaluation/run_evaluation.py --duration $DURATION
 
 # cleanup
