@@ -3,6 +3,32 @@ import os
 import shutil
 import re
 
+def set_company_percent(content, map_name, percent):
+    marker = f"{map_name} = Map.of("
+    start = content.find(marker)
+    if start == -1:
+        raise RuntimeError(f"{map_name} not found in Config.java")
+
+    end = content.find(");", start)
+    if end == -1:
+        raise RuntimeError(f"{map_name} block end not found in Config.java")
+
+    block = content[start:end]
+    block = re.sub(
+        r'("company",\s*)\d+(\.\d+)?',
+        rf'\g<1>{float(percent)}',
+        block,
+        count=1
+    )
+
+    return content[:start] + block + content[end:]
+
+
+def prepare_config(content, equality_percent):
+    content = set_company_percent(content, "FIELD_PRESENCE", 100)
+    content = set_company_percent(content, "EQUALITY_MIN_PERCENT", equality_percent)
+    return content
+
 def generate_data(percentage, output_dir):
     """
     Modifies the Config.java to enforce a specific percentage of '=' operators
@@ -21,20 +47,16 @@ def generate_data(percentage, output_dir):
         with open(config_path, "r") as f:
             content = f.read()
             
-        # Replace the percentage value for "company"
-        # Specifically targeting: "company", 70.0 (or similar)
-        content = re.sub(r'("company",\s*)\d+\.\d+', rf'\g<1>{float(percentage)}', content)
+        content = prepare_config(content, percentage)
         
         with open(config_path, "w") as f:
             f.write(content)
             
-        # Compile Java
         out_dir = "../../generator/out"
         os.makedirs(out_dir, exist_ok=True)
         print(f"Compiling generator...")
         subprocess.run(["javac", "-d", out_dir, "../../generator/src/Config.java", "../../generator/src/Generator.java", "../../generator/src/Main.java", "../../generator/src/BenchmarkRunner.java"], check=True)
         
-        # Run generator
         print(f"Running generator to {output_dir}...")
         # Main args: publications, subscriptions, parallelism, outputDir, seed
         subprocess.run(["java", "-cp", out_dir, "Main", "3600", "10000", "4", output_dir, "42"], check=True)

@@ -5,6 +5,26 @@ import os
 import signal
 import sys
 
+def start_python(*args):
+    if os.name == "nt":
+        return subprocess.Popen(
+            [sys.executable, *args],
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    return subprocess.Popen([sys.executable, *args])
+
+
+def stop_subscriber(process):
+    try:
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.send_signal(signal.SIGINT)
+    except Exception:
+        process.terminate()
+        
+        
 def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
     import pika
     print("Waiting for all queues to drain completely...")
@@ -13,7 +33,12 @@ def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
     
     queues_to_check = []
     for i in range(1, brokers_count + 1):
-        queues_to_check.extend([f'broker.b{i}.subs', f'broker.b{i}.routed_subs', f'broker.b{i}.pubs'])
+        queues_to_check.extend([
+            f'broker.b{i}.subs',
+            f'broker.b{i}.routing',
+            f'broker.b{i}.pubs',
+            f'broker.b{i}.forwarded_pubs',
+        ])
     for i in range(1, subs_count + 1):
         queues_to_check.append(f'subscriber.sub{i}.notifications')
         
@@ -24,6 +49,8 @@ def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
             try:
                 res = channel.queue_declare(queue=q, passive=True)
                 total_messages += res.method.message_count
+            except pika.exceptions.ChannelClosedByBroker:
+                channel = connection.channel()
             except Exception:
                 pass
                 
@@ -46,13 +73,13 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
         raise FileNotFoundError(f"Generated files not found in {generated_dir}. Please run pubsub/evaluation/generate_data.py first.")
     
     # 1. Start Coordinator
-    coord = subprocess.Popen(["python", "pubsub/coordinator/coordinator.py"])
+    coord = start_python("pubsub/coordinator/coordinator.py")
     time.sleep(2)
     
     # 2. Start 3 Brokers
     brokers = []
     for i in range(1, 4):
-        b = subprocess.Popen(["python", "pubsub/broker/broker.py", "--id", f"b{i}"])
+        b = start_python("pubsub/broker/broker.py", "--id", f"b{i}")
         brokers.append(b)
     time.sleep(3)
     
@@ -60,16 +87,29 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     subs = []
     for i in range(1, 4):
         count = 3334 if i == 3 else 3333
-        s = subprocess.Popen(["python", "pubsub/subscriber/subscriber.py", "--id", f"sub{i}", "--file", subs_file, "--count", str(count)])
+        s = start_python(
+            "pubsub/subscriber/subscriber.py",
+            "--id", f"sub{i}",
+            "--file", subs_file,
+            "--count", str(count)
+        )
         subs.append(s)
     
     print(f"Waiting for subscriptions to register...")
+    time.sleep(2)
+    wait_for_queues_to_drain()
     time.sleep(5)
     
     # 4. Start 2 Publishers
     pubs = []
     for i in range(1, 3):
-        p = subprocess.Popen(["python", "pubsub/publisher/publisher.py", "--id", f"pub{i}", "--file", pubs_file, "--duration", str(duration), "--rate", "10"])
+        p = start_python(
+            "pubsub/publisher/publisher.py",
+            "--id", f"pub{i}",
+            "--file", pubs_file,
+            "--duration", str(duration),
+            "--rate", "10"
+        )
         pubs.append(p)
         
     print(f"Publishing for {duration} seconds...")
@@ -79,10 +119,19 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     print("Publishing finished.")
 
     wait_for_queues_to_drain()
+
     for s in subs:
-        s.terminate()
+        stop_subscriber(s)
+
+    for s in subs:
+        try:
+            s.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            s.terminate()
+
     for b in brokers:
         b.terminate()
+
     coord.terminate()
     
     time.sleep(2)
