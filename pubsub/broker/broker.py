@@ -11,12 +11,22 @@ from common.coordinator_client import send_heartbeat, CoordinatorClient
 from common.matcher import matches
 from proto import messages_pb2
 
+NEIGHBORS = {
+    "b1": ["b2"],
+    "b2": ["b1", "b3"],
+    "b3": ["b2"],
+}
+
 class Broker:
     def __init__(self, broker_id):
+        self.local_sub_count = 0
         self.broker_id = broker_id
         
+        self.neighbors = NEIGHBORS.get(self.broker_id, [])
+        self.routing_seen = set()
+        
         self.local_subscriptions = [] # Subscriptions stored on this broker
-        self.routing_table = [] # Tuples of (messages_pb2.Subscription, target_broker_id)
+        self.routing_table = [] #  Tuples of (message_pb2.Subscription, next_hop_broker_id)
         
         self.coord_client = CoordinatorClient()
         
@@ -58,32 +68,81 @@ class Broker:
         
         # Store it locally
         self.local_subscriptions.append(sub)
-        print(f"[{self.broker_id}] Stored local subscription {sub.id}")
-        
-        # Flood it to all other brokers as a Routing Entry
-        brokers = self.coord_client.get_brokers()
-        
+        self.local_sub_count += 1
+        if self.local_sub_count % 1000 == 0:
+            print(f"[{self.broker_id}] Stored {self.local_sub_count} local subscriptions")
+                
+        # Simple Routing: propagate this local subscription to neighboring brokers.
+        # The source_broker field represents the immediate sender / next hop.
         routing_entry = messages_pb2.RoutingEntry()
         routing_entry.source_broker = self.broker_id
         routing_entry.subscription.CopyFrom(sub)
-        
-        for other_broker in brokers:
-            if other_broker != self.broker_id:
-                self.channel.basic_publish(
-                    exchange='',
-                    routing_key=f'broker.{other_broker}.routing',
-                    body=routing_entry.SerializeToString()
-                )
+
+        for neighbor in self.neighbors:
+            self.channel.basic_publish(
+                exchange='',
+                routing_key=f'broker.{neighbor}.routing',
+                body=routing_entry.SerializeToString()
+            )
                 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def handle_routing_entry(self, ch, method, properties, body):
         entry = messages_pb2.RoutingEntry()
         entry.ParseFromString(body)
-        
-        self.routing_table.append((entry.subscription, entry.source_broker))
+
+        incoming_neighbor = entry.source_broker
+        sub_id = entry.subscription.id
+        seen_key = (sub_id, incoming_neighbor)
+
+        if seen_key in self.routing_seen:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        self.routing_seen.add(seen_key)
+
+        # Store route: to reach this subscription, forward publications to incoming_neighbor.
+        self.routing_table.append((entry.subscription, incoming_neighbor))
+
+        # Forward the routing entry to all neighbors except the one it came from.
+        forwarded_entry = messages_pb2.RoutingEntry()
+        forwarded_entry.source_broker = self.broker_id
+        forwarded_entry.subscription.CopyFrom(entry.subscription)
+
+        for neighbor in self.neighbors:
+            if neighbor != incoming_neighbor:
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=f'broker.{neighbor}.routing',
+                    body=forwarded_entry.SerializeToString()
+                )
+
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
+    def _route_publication(self, pub, incoming_broker=None):
+        # Deliver to local subscriptions first.
+        self._match_local_and_notify(pub)
+
+        # Then forward to next-hop brokers whose routing entries match.
+        target_brokers = set()
+
+        for routing_sub, next_hop in self.routing_table:
+            if next_hop == incoming_broker:
+                continue
+
+            if matches(pub, routing_sub):
+                target_brokers.add(next_hop)
+
+        for target_broker in target_brokers:
+            self.channel.basic_publish(
+                exchange='',
+                routing_key=f'broker.{target_broker}.forwarded_pubs',
+                properties=pika.BasicProperties(
+                    headers={"from_broker": self.broker_id}
+                ),
+                body=pub.SerializeToString()
+            )
+            
     def _match_local_and_notify(self, pub):
         for sub in self.local_subscriptions:
             if matches(pub, sub):
@@ -100,35 +159,21 @@ class Broker:
     def handle_publication(self, ch, method, properties, body):
         pub = messages_pb2.Publication()
         pub.ParseFromString(body)
-        
-        # 1. Match against local subscriptions
-        self._match_local_and_notify(pub)
-                
-        # 2. Match against routing table to find which brokers need this publication
-        target_brokers = set()
-        for routing_sub, target_broker in self.routing_table:
-            if matches(pub, routing_sub):
-                target_brokers.add(target_broker)
-                
-        # 3. Forward to the responsible brokers
-        for target_broker in target_brokers:
-            self.channel.basic_publish(
-                exchange='',
-                routing_key=f'broker.{target_broker}.forwarded_pubs',
-                body=pub.SerializeToString()
-            )
-            
+
+        self._route_publication(pub, incoming_broker=None)
+
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def handle_forwarded_publication(self, ch, method, properties, body):
         pub = messages_pb2.Publication()
         pub.ParseFromString(body)
-        
-        # This publication was already routed to us by another broker.
-        # We only need to match it locally and deliver it.
-        # We do NOT forward it again to avoid loops and redundant network traffic.
-        self._match_local_and_notify(pub)
-        
+
+        incoming_broker = None
+        if properties and properties.headers:
+            incoming_broker = properties.headers.get("from_broker")
+
+        self._route_publication(pub, incoming_broker=incoming_broker)
+
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def start(self):
