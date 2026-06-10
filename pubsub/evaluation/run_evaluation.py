@@ -103,10 +103,12 @@ def run_scenario(
     if not os.path.exists(subs_file) or not os.path.exists(pubs_file):
         raise FileNotFoundError(f"Generated files not found in {generated_dir}. Please run pubsub/evaluation/generate_data.py first.")
     
-    # 0. Start Trusted Authority (TA)
+    # 0. Start Trusted Authority (TA) only if using encryption
     print("Starting Trusted Authority (TA) server...")
-    ta = start_python("pubsub/trusted_authority.py")
-    time.sleep(3)
+    ta = None
+    if use_encryption:
+        ta = start_python("pubsub/trusted_authority.py")
+        time.sleep(3)
     
     # 1. Start Coordinator
     coord = start_python("pubsub/coordinator/coordinator.py")
@@ -220,7 +222,9 @@ def run_scenario(
         b.terminate()
 
     coord.terminate()
-    ta.terminate()
+    
+    if ta:
+        ta.terminate()
     
     time.sleep(2)
     

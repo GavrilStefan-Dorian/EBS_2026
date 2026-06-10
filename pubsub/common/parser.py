@@ -4,12 +4,16 @@ import time
 import requests
 from datetime import datetime
 from proto import messages_pb2
+import os
 
 TA_URL_ENCRYPT = "http://127.0.0.1:8000/encrypt"
 TA_URL_DECRYPT = "http://127.0.0.1:8000/decrypt"
 
 _encrypt_cache = {}
 _decrypt_cache = {}
+
+def use_encryption():
+    return os.environ.get("USE_ENCRYPTION", "1") == "1"
 
 def encrypt_string(val):
     """Contacts the Trusted Authority to encrypt string fields deterministically."""
@@ -79,7 +83,7 @@ def parse_publication_line(line, pub_id=None, publisher_id=""):
             val_str = parts[1].strip()
             val, is_str = parse_value(key, val_str)
             if is_str:
-                pub.string_fields[key] = encrypt_string(val)
+                pub.string_fields[key] = encrypt_string(val) if use_encryption() else val
             else:
                 pub.double_fields[key] = val
                 
@@ -116,7 +120,7 @@ def parse_subscription_line(line, sub_id=None, subscriber_id=""):
             cond.operator = op
             cond.is_string = is_str
             if is_str:
-                cond.string_value = encrypt_string(val)
+                cond.string_value = encrypt_string(val) if use_encryption() else val
             else:
                 cond.double_value = val
                 
