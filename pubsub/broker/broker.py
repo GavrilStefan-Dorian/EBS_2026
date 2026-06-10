@@ -58,7 +58,7 @@ class Broker:
         self.channel.queue_declare(queue=f'broker.{self.broker_id}.pubs', durable=True)
         
         # 4. Publications forwarded from other brokers
-        self.channel.queue_declare(queue=f'broker.{self.broker_id}.forwarded_pubs')
+        self.channel.queue_declare(queue=f'broker.{self.broker_id}.forwarded_pubs', durable=True)
         
         # Notifications exchange
         self.channel.exchange_declare(exchange='notifications_exchange', exchange_type='direct')
@@ -166,11 +166,11 @@ class Broker:
             self.channel.basic_publish(
                 exchange='',
                 routing_key=f'broker.{target_broker}.forwarded_pubs',
-                properties=pika.BasicProperties(
-                    headers={"from_broker": self.broker_id}
-                ),
                 body=pub.SerializeToString(),
-                properties=pika.BasicProperties(delivery_mode=2)
+                properties=pika.BasicProperties(
+                    delivery_mode=2,
+                    headers={"from_broker": self.broker_id}
+                )
             )
             
     def _match_local_and_notify(self, pub):
