@@ -89,7 +89,8 @@ def run_scenario(
     simulate_failure=False,
     failure_after=60,
     failed_broker="b2",
-    use_encryption=True
+    use_encryption=True,
+    recovery_delay=5
 ):
     print(f"\n--- Running Scenario: {scenario_name} ---")
     os.environ["USE_ENCRYPTION"] = "1" if use_encryption else "0"
@@ -187,7 +188,8 @@ def run_scenario(
             except subprocess.TimeoutExpired:
                 brokers[idx].kill()
 
-            time.sleep(5)
+            print(f"Keeping {failed_broker} down for {recovery_delay} seconds...")
+            time.sleep(recovery_delay)
 
             print(f"Restarting failed broker {failed_broker}")
             brokers[idx] = start_python("pubsub/broker/broker.py", "--id", failed_broker)
@@ -276,6 +278,7 @@ if __name__ == "__main__":
     parser.add_argument('--simulate-failure', action='store_true')
     parser.add_argument('--failure-after', type=int, default=60)
     parser.add_argument('--failed-broker', default='b2')
+    parser.add_argument('--recovery-delay', type=int, default=5)
     parser.add_argument('--encryption', choices=['encrypted', 'unencrypted', 'both'], default='both')
     
     args = parser.parse_args()
@@ -306,7 +309,8 @@ if __name__ == "__main__":
             simulate_failure=args.simulate_failure,
             failure_after=args.failure_after,
             failed_broker=args.failed_broker,
-            use_encryption=use_encryption
+            use_encryption=use_encryption,
+            recovery_delay=args.recovery_delay
         )
         results[f"100% Equality ({mode_str})"] = res_100
 
@@ -318,7 +322,8 @@ if __name__ == "__main__":
             simulate_failure=args.simulate_failure,
             failure_after=args.failure_after,
             failed_broker=args.failed_broker,
-            use_encryption=use_encryption
+            use_encryption=use_encryption,
+            recovery_delay=args.recovery_delay
         )
         results[f"25% Equality ({mode_str})"] = res_25
     

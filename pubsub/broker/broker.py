@@ -237,7 +237,7 @@ class Broker:
                         f"[{self.broker_id}] Ignoring transient empty neighbor list. "
                         f"Active brokers: {active_brokers}"
                     )
-                    time.sleep(2)
+                    time.sleep(5)
                     continue
 
                 if set(new_neighbors) != set(self.neighbors):

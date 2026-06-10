@@ -118,9 +118,8 @@ class Subscriber:
         # Periodically log metrics to file for evaluation
         if self.metrics['received'] % 10000 == 0:
             avg_latency = self.metrics['total_latency_ms'] / self.metrics['received']
-            with open(f"{self.subscriber_id}_metrics.json", "w") as f:
-                json.dump(self.metrics, f)
-                
+            print(f"[{self.subscriber_id}] Received {self.metrics['received']} notifications, avg latency={avg_latency:.2f}ms")
+                        
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
