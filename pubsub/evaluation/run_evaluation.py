@@ -88,9 +88,11 @@ def run_scenario(
     num_pubs=2,
     simulate_failure=False,
     failure_after=60,
-    failed_broker="b2"
+    failed_broker="b2",
+    use_encryption=True
 ):
     print(f"\n--- Running Scenario: {scenario_name} ---")
+    os.environ["USE_ENCRYPTION"] = "1" if use_encryption else "0"
     for fname in [f"pub{i}_metrics.json" for i in range(1, num_pubs + 1)] + [f"sub{i}_metrics.json" for i in range(1, 4)]:
         if os.path.exists(fname):
             os.remove(fname)
@@ -272,6 +274,7 @@ if __name__ == "__main__":
     parser.add_argument('--simulate-failure', action='store_true')
     parser.add_argument('--failure-after', type=int, default=60)
     parser.add_argument('--failed-broker', default='b2')
+    parser.add_argument('--encryption', choices=['encrypted', 'unencrypted', 'both'], default='both')
     
     args = parser.parse_args()
     
@@ -282,45 +285,64 @@ if __name__ == "__main__":
     duration = args.duration
     num_pubs = 2
     
-    res_100 = run_scenario(
-        "100% Equality",
-        data_100_dir,
-        duration=duration,
-        num_pubs=num_pubs,
-        simulate_failure=args.simulate_failure,
-        failure_after=args.failure_after,
-        failed_broker=args.failed_broker
-    )
-
-    res_25 = run_scenario(
-        "25% Equality",
-        data_25_dir,
-        duration=duration,
-        num_pubs=num_pubs,
-        simulate_failure=args.simulate_failure,
-        failure_after=args.failure_after,
-        failed_broker=args.failed_broker
-    )
+    modes = []
+    if args.encryption in ['encrypted', 'both']:
+        modes.append(True)
+    if args.encryption in ['unencrypted', 'both']:
+        modes.append(False)
+        
+    results = {}
     
-    report = f"""# Evaluation Report
+    for use_encryption in modes:
+        mode_str = "Encrypted" if use_encryption else "Unencrypted"
+        
+        res_100 = run_scenario(
+            f"100% Equality ({mode_str})",
+            data_100_dir,
+            duration=duration,
+            num_pubs=num_pubs,
+            simulate_failure=args.simulate_failure,
+            failure_after=args.failure_after,
+            failed_broker=args.failed_broker,
+            use_encryption=use_encryption
+        )
+        results[f"100% Equality ({mode_str})"] = res_100
 
-## Setup
-- 3 Brokers forming a line/tree Simple Routing overlay: b1 -- b2 -- b3
-- 3 Subscribers registering a total of 10000 subscriptions
-- {num_pubs} Publishers sending messages for {duration} seconds
+        res_25 = run_scenario(
+            f"25% Equality ({mode_str})",
+            data_25_dir,
+            duration=duration,
+            num_pubs=num_pubs,
+            simulate_failure=args.simulate_failure,
+            failure_after=args.failure_after,
+            failed_broker=args.failed_broker,
+            use_encryption=use_encryption
+        )
+        results[f"25% Equality ({mode_str})"] = res_25
+    
+    report_lines = [
+        "# Evaluation Report\n",
+        "## Setup",
+        "- 3 Brokers forming a line/tree Simple Routing overlay: b1 -- b2 -- b3",
+        "- 3 Subscribers registering a total of 10000 subscriptions",
+        f"- {num_pubs} Publishers sending messages for {duration} seconds",
+    ]
+    if args.simulate_failure:
+        report_lines.append(f"- Simulated Failure: Broker {args.failed_broker} fails after {args.failure_after}s")
 
-## Scenario 1: 100% Equality on 'company'
-- Publications Sent: {res_100[3]}
-- Delivered Notifications: {res_100[0]}
-- Average Latency: {res_100[1]:.2f} ms
-- Match Rate: {res_100[2]*100:.6f}%
+    report_lines.append("")
 
-## Scenario 2: 25% Equality on 'company'
-- Publications Sent: {res_25[3]}
-- Delivered Notifications: {res_25[0]}
-- Average Latency: {res_25[1]:.2f} ms
-- Match Rate: {res_25[2]*100:.6f}%
-"""
+    for name, res in results.items():
+        report_lines.extend([
+            f"## Scenario: {name}",
+            f"- Publications Sent: {res[3]}",
+            f"- Delivered Notifications: {res[0]}",
+            f"- Average Latency: {res[1]:.2f} ms",
+            f"- Match Rate: {res[2]*100:.6f}%\n"
+        ])
+        
+    report = "\n".join(report_lines)
+
     # Write report to project root
     report_path = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "Evaluation_Report.md")
     with open(report_path, "w") as f:
