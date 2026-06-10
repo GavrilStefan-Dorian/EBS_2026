@@ -12,7 +12,7 @@ from common.coordinator_client import CoordinatorClient
 from common.parser import parse_publication_line
 
 class Publisher:
-    def __init__(self, publisher_id, file_path):
+    def __init__(self, publisher_id, file_path, fault_tolerance=False):
         self.publisher_id = publisher_id
         self.file_path = file_path
         self.coord_client = CoordinatorClient()
@@ -29,7 +29,23 @@ class Publisher:
             raise Exception("Could not connect to RabbitMQ")
                 
         self.channel = self.connection.channel()
+        self.broker_cache = []
+        self.broker_cache_time = 0
+        self.BROKER_CACHE_TTL = 5
         
+        self.fault_tolerance = fault_tolerance
+        
+    def get_brokers_cached(self):
+        now = time.time()
+
+        if not self.broker_cache or now - self.broker_cache_time > self.BROKER_CACHE_TTL:
+            brokers = self.coord_client.get_brokers()
+            if brokers:
+                self.broker_cache = brokers
+                self.broker_cache_time = now
+
+        return self.broker_cache
+            
     def start(self, duration_sec=None, rate_per_sec=None):
         with open(self.file_path, 'r') as f:
             lines = [line.strip() for line in f if line.strip()]
@@ -51,21 +67,36 @@ class Publisher:
             if not pub:
                 continue
                 
-            brokers = self.coord_client.get_brokers()
+            brokers = self.get_brokers_cached()
             if not brokers:
                 print("No brokers available, waiting...")
                 time.sleep(1)
                 continue
                 
-            broker = random.choice(brokers)
-            
+            brokers = sorted(self.coord_client.get_brokers())
+
+            if not brokers:
+                time.sleep(1)
+                continue
+
+            if self.fault_tolerance and len(brokers) > 1:
+                target_brokers = random.sample(brokers, 2)
+            else:
+                target_brokers = [random.choice(brokers)]
+
             pub.timestamp = int(time.time() * 1000)
-            
-            self.channel.basic_publish(
-                exchange='',
-                routing_key=f'broker.{broker}.pubs',
-                body=pub.SerializeToString()
-            )
+
+            serialized_pub = pub.SerializeToString()
+
+            for broker in target_brokers:
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=f'broker.{broker}.pubs',
+                    body=serialized_pub,
+                    properties=pika.BasicProperties(delivery_mode=2)
+                )
+
+            # Count logical publications, not replicated copies.
             sent_count += 1
             
             if rate_per_sec:
@@ -88,7 +119,8 @@ if __name__ == '__main__':
     parser.add_argument('--file', required=True)
     parser.add_argument('--duration', type=int, help='Duration in seconds to publish')
     parser.add_argument('--rate', type=int, help='Messages per second')
+    parser.add_argument('--fault-tolerance', action='store_true')
     args = parser.parse_args()
     
-    pub = Publisher(args.id, args.file)
+    pub = Publisher(args.id, args.file, fault_tolerance=args.fault_tolerance)
     pub.start(duration_sec=args.duration, rate_per_sec=args.rate)

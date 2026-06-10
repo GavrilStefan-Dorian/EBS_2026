@@ -4,6 +4,7 @@
 set -e
 
 DURATION=${1:-180}
+shift || true
 
 echo "EBS Pub/Sub System - End-to-end & Evaluation"
 echo "Duration: $DURATION seconds"
@@ -50,7 +51,7 @@ else
     source pubsub/venv/bin/activate
 fi
 
-python pubsub/evaluation/run_evaluation.py --duration $DURATION
+python pubsub/evaluation/run_evaluation.py --duration "$DURATION" "$@"
 
 # cleanup
 echo -e "\n[5/5] Stopping RabbitMQ..."
