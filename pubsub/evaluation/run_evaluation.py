@@ -200,8 +200,6 @@ def run_scenario(
     check_processes_alive(brokers, "broker b", allowed_dead=allowed_dead)
     check_processes_alive(subs, "subscriber sub")
     
-    time.sleep(20)
-    
     for s in subs:
         stop_subscriber(s)
 
