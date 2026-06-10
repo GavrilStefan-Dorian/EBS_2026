@@ -269,13 +269,13 @@ class Broker:
             time.sleep(2)
 
     def apply_neighbors_update(self, old_neighbors, new_neighbors, active_brokers):
-        active_set = set(active_brokers)
+        valid_next_hops = set(new_neighbors)
 
         before = len(self.routing_table)
         self.routing_table = [
             (sub, next_hop)
             for sub, next_hop in self.routing_table
-            if next_hop in active_set
+            if next_hop in valid_next_hops
         ]
         after = len(self.routing_table)
 

@@ -88,7 +88,8 @@ class Subscriber:
                 self.channel.basic_publish(
                     exchange='',
                     routing_key=f'broker.{target_broker}.subs',
-                    body=sub.SerializeToString()
+                    body=sub.SerializeToString(),
+                    properties=pika.BasicProperties(delivery_mode=2)
                 )
             
         print(f"[{self.subscriber_id}] Sent {count} subscriptions, distributed across all brokers.")
