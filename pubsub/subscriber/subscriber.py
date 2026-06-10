@@ -11,7 +11,7 @@ import signal
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.coordinator_client import CoordinatorClient
-from common.parser import parse_subscription_line
+from common.parser import parse_subscription_line, decrypt_string
 from proto import messages_pb2
 
 class Subscriber:
@@ -105,6 +105,10 @@ class Subscriber:
 
         self.seen_notifications.add(key)
         
+        # Decrypt string fields so the subscriber sees the original content
+        for k, v in list(notif.publication.string_fields.items()):
+            notif.publication.string_fields[k] = decrypt_string(v)
+            
         latency = int(time.time() * 1000) - notif.publication.timestamp
         self.metrics['received'] += 1
         self.metrics['total_latency_ms'] += latency
