@@ -1,0 +1,10 @@
+{
+  "brokers": ["b1", "b2", "b3"],
+  "neighbors": {
+    "b1": ["b2"],
+    "b2": ["b1", "b3"],
+    "b3": ["b2"]
+  },
+  "recovery_strategy": "connect_components",
+  "heartbeat_timeout_seconds": 20
+}

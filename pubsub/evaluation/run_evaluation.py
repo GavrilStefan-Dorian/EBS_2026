@@ -25,19 +25,26 @@ def stop_subscriber(process):
         process.terminate()
         
         
-def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
+def wait_for_queues_to_drain(brokers_count=3, subs_count=3, ignored_brokers=None):
     import pika
+    ignored_brokers = ignored_brokers or set()
+    
     print("Waiting for all queues to drain completely...")
     connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
     
     queues_to_check = []
     for i in range(1, brokers_count + 1):
+        broker_id = f"b{i}"
+
+        if broker_id in ignored_brokers:
+            continue
+
         queues_to_check.extend([
-            f'broker.b{i}.subs',
-            f'broker.b{i}.routing',
-            f'broker.b{i}.pubs',
-            f'broker.b{i}.forwarded_pubs',
+            f'broker.{broker_id}.subs',
+            f'broker.{broker_id}.routing',
+            f'broker.{broker_id}.pubs',
+            f'broker.{broker_id}.forwarded_pubs',
         ])
     for i in range(1, subs_count + 1):
         queues_to_check.append(f'subscriber.sub{i}.notifications')
@@ -64,12 +71,25 @@ def wait_for_queues_to_drain(brokers_count=3, subs_count=3):
     connection.close()
     print("All queues empty, proceeding.")
 
-def check_processes_alive(processes, name):
+def check_processes_alive(processes, name, allowed_dead=None):
+    allowed_dead = allowed_dead or set()
+
     for i, p in enumerate(processes, start=1):
-        if p.poll() is not None:
-            raise RuntimeError(f"{name}{i} died during evaluation")
+        process_name = f"{name}{i}"
+
+        if p.poll() is not None and process_name not in allowed_dead:
+            raise RuntimeError(f"{process_name} died during evaluation")
         
-def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num_pubs=2):
+def run_scenario(
+    scenario_name,
+    generated_dir,
+    duration=180,
+    num_subs=10000,
+    num_pubs=2,
+    simulate_failure=False,
+    failure_after=60,
+    failed_broker="b2"
+):
     print(f"\n--- Running Scenario: {scenario_name} ---")
     for fname in [f"pub{i}_metrics.json" for i in range(1, num_pubs + 1)] + [f"sub{i}_metrics.json" for i in range(1, 4)]:
         if os.path.exists(fname):
@@ -105,13 +125,22 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     for i in range(1, 4):
         count = counts[i - 1]
         offset = offsets[i - 1]
-        s = start_python(
+        subscriber_args = [
             "pubsub/subscriber/subscriber.py",
             "--id", f"sub{i}",
             "--file", subs_file,
             "--count", str(count),
             "--offset", str(offset)
-        )
+        ]
+
+        if simulate_failure:
+            subscriber_args.extend(["--replication-factor", "2"])
+        else:
+            subscriber_args.extend(["--replication-factor", "1"])
+
+        s = start_python(*subscriber_args)
+
+        
         subs.append(s)
     
     print(f"Waiting for subscriptions to register...")
@@ -126,24 +155,58 @@ def run_scenario(scenario_name, generated_dir, duration=180, num_subs=10000, num
     # 4. Start 2 Publishers
     pubs = []
     for i in range(1, 3):
-        p = start_python(
+        publisher_args = [
             "pubsub/publisher/publisher.py",
             "--id", f"pub{i}",
             "--file", pubs_file,
             "--duration", str(duration),
             "--rate", "10"
-        )
+        ]
+
+        if simulate_failure:
+            publisher_args.append("--fault-tolerance")
+
+        p = start_python(*publisher_args)
         pubs.append(p)
+
+    if simulate_failure:
+        import threading
+
+        def kill_broker_later():
+            time.sleep(failure_after)
+            idx = int(failed_broker[1:]) - 1
+
+            print(f"Simulating broker failure: terminating {failed_broker}")
+            brokers[idx].terminate()
+            try:
+                brokers[idx].wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                brokers[idx].kill()
+
+            time.sleep(5)
+
+            print(f"Restarting failed broker {failed_broker}")
+            brokers[idx] = start_python("pubsub/broker/broker.py", "--id", failed_broker)
+
+        threading.Thread(target=kill_broker_later, daemon=True).start()
         
     print(f"Publishing for {duration} seconds...")
+    
+    
     for p in pubs:
         p.wait()
         
     print("Publishing finished.")
 
-    wait_for_queues_to_drain()
-    check_processes_alive(brokers, "broker b")
+    ignored_brokers = {failed_broker} if simulate_failure else set()
+    allowed_dead = {f"broker {failed_broker}"} if simulate_failure else set()
+
+    wait_for_queues_to_drain(ignored_brokers=ignored_brokers)
+    check_processes_alive(brokers, "broker b", allowed_dead=allowed_dead)
     check_processes_alive(subs, "subscriber sub")
+    
+    time.sleep(20)
+    
     for s in subs:
         stop_subscriber(s)
 
@@ -206,6 +269,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--duration', type=int, default=180, help='Duration in seconds to publish')
+    parser.add_argument('--simulate-failure', action='store_true')
+    parser.add_argument('--failure-after', type=int, default=60)
+    parser.add_argument('--failed-broker', default='b2')
+    
     args = parser.parse_args()
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -215,8 +282,25 @@ if __name__ == "__main__":
     duration = args.duration
     num_pubs = 2
     
-    res_100 = run_scenario("100% Equality", data_100_dir, duration=duration, num_pubs=num_pubs)
-    res_25 = run_scenario("25% Equality", data_25_dir, duration=duration, num_pubs=num_pubs)
+    res_100 = run_scenario(
+        "100% Equality",
+        data_100_dir,
+        duration=duration,
+        num_pubs=num_pubs,
+        simulate_failure=args.simulate_failure,
+        failure_after=args.failure_after,
+        failed_broker=args.failed_broker
+    )
+
+    res_25 = run_scenario(
+        "25% Equality",
+        data_25_dir,
+        duration=duration,
+        num_pubs=num_pubs,
+        simulate_failure=args.simulate_failure,
+        failure_after=args.failure_after,
+        failed_broker=args.failed_broker
+    )
     
     report = f"""# Evaluation Report
 

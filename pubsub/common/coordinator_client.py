@@ -33,10 +33,11 @@ class CoordinatorClient:
     def on_response(self, ch, method, props, body):
         if self.corr_id == props.correlation_id:
             self.response = json.loads(body)
-
-    def get_brokers(self):
+    
+    def rpc_request(self, payload):
         self.response = None
         self.corr_id = str(uuid.uuid4())
+
         self.channel.basic_publish(
             exchange='',
             routing_key='coordinator.rpc_queue',
@@ -44,11 +45,27 @@ class CoordinatorClient:
                 reply_to=self.callback_queue,
                 correlation_id=self.corr_id,
             ),
-            body=''
+            body=json.dumps(payload)
         )
-        self.connection.process_data_events(time_limit=2)
-        return self.response or []
 
+        self.connection.process_data_events(time_limit=2)
+        return self.response
+    
+    def get_brokers(self):
+        response = self.rpc_request({"type": "get_brokers"})
+        return response or []
+
+    def get_neighbors(self, broker_id):
+        response = self.rpc_request({
+            "type": "get_neighbors",
+            "broker_id": broker_id
+        })
+
+        if not response:
+            return [], []
+
+        return response.get("neighbors", []), response.get("active_brokers", [])
+    
     def close(self):
         self.connection.close()
 
