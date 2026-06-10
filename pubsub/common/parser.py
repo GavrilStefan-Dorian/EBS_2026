@@ -1,8 +1,43 @@
 import re
 import uuid
 import time
+import requests
 from datetime import datetime
 from proto import messages_pb2
+
+TA_URL_ENCRYPT = "http://127.0.0.1:8000/encrypt"
+TA_URL_DECRYPT = "http://127.0.0.1:8000/decrypt"
+
+_encrypt_cache = {}
+_decrypt_cache = {}
+
+def encrypt_string(val):
+    """Contacts the Trusted Authority to encrypt string fields deterministically."""
+    if val in _encrypt_cache:
+        return _encrypt_cache[val]
+    try:
+        resp = requests.post(TA_URL_ENCRYPT, json={"value": val}, timeout=2)
+        if resp.status_code == 200:
+            encrypted = resp.json()["encrypted_value"]
+            _encrypt_cache[val] = encrypted
+            return encrypted
+    except Exception:
+        pass
+    return val
+
+def decrypt_string(val):
+    """Contacts the Trusted Authority to decrypt string fields back to plaintext."""
+    if val in _decrypt_cache:
+        return _decrypt_cache[val]
+    try:
+        resp = requests.post(TA_URL_DECRYPT, json={"encrypted_value": val}, timeout=2)
+        if resp.status_code == 200:
+            decrypted = resp.json()["value"]
+            _decrypt_cache[val] = decrypted
+            return decrypted
+    except Exception:
+        pass
+    return val
 
 def parse_value(field, val_str):
     val_str = val_str.strip()
@@ -44,7 +79,7 @@ def parse_publication_line(line, pub_id=None, publisher_id=""):
             val_str = parts[1].strip()
             val, is_str = parse_value(key, val_str)
             if is_str:
-                pub.string_fields[key] = val
+                pub.string_fields[key] = encrypt_string(val)
             else:
                 pub.double_fields[key] = val
                 
@@ -81,7 +116,7 @@ def parse_subscription_line(line, sub_id=None, subscriber_id=""):
             cond.operator = op
             cond.is_string = is_str
             if is_str:
-                cond.string_value = val
+                cond.string_value = encrypt_string(val)
             else:
                 cond.double_value = val
                 

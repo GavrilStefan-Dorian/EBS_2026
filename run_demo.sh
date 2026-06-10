@@ -26,7 +26,7 @@ else
 fi
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install pika protobuf grpcio-tools
+python -m pip install pika protobuf grpcio-tools fastapi uvicorn requests
 
 echo -e "\n[2/5] Compiling Protobuf schemas..."
 python -m grpc_tools.protoc -I. --python_out=. proto/messages.proto
@@ -34,7 +34,7 @@ python -m grpc_tools.protoc -I. --python_out=. proto/messages.proto
 echo -e "\n[3/5] Starting RabbitMQ..."
 docker compose up -d
 echo "Waiting 10 seconds for RabbitMQ to be fully ready..."
-sleep 10
+sleep 20
 
 echo -e "\n[4/5] Running Evaluation..."
 # The evaluation script will:
